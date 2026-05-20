@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>図面比較ツール v12</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+body { overscroll-behavior: none; }
+#canvas-container {
+  background-image: linear-gradient(45deg,#f3f4f6 25%,transparent 25%),
+    linear-gradient(-45deg,#f3f4f6 25%,transparent 25%),
+    linear-gradient(45deg,transparent 75%,#f3f4f6 75%),
+    linear-gradient(-45deg,transparent 75%,#f3f4f6 75%);
+  background-size: 20px 20px;
+  background-position: 0 0,0 10px,10px -10px,-10px 0px;
+  background-color: #fff;
+  overflow: hidden; position: relative;
+}
+#canvas-container.mode-pan { cursor: grab; }
+#canvas-container.mode-pan:active { cursor: grabbing; }
+#canvas-container.mode-erase, #canvas-container.mode-select { cursor: crosshair; }
+.tg { display:flex; align-items:center; gap:0.4rem; padding-right:0.6rem; border-right:1px solid #e5e7eb; }
+.tg:last-child { border-right:none; }
+input[type=file] { display:block; width:100%; padding:0.4rem; font-size:0.8rem; color:#374151;
+  background:#f9fafb; border:1px solid #d1d5db; border-radius:0.375rem; cursor:pointer; }
+input[type=file]::file-selector-button { padding:0.2rem 0.6rem; border-radius:0.25rem;
+  border:1px solid #cbd5e1; background:#fff; font-weight:600; color:#475569; cursor:pointer; margin-right:0.4rem; }
+#thr-red  { accent-color:#ef4444; }
+#thr-blue { accent-color:#3b82f6; }
+button:disabled { opacity:0.35; cursor:not-allowed; }
+</style>
+</head>
+<body class="bg-gray-100 h-screen flex flex-col font-sans text-gray-800 text-sm">
+
+<!-- 印刷モーダル -->
+<div id="print-modal" class="hidden fixed inset-0 bg-black/60 z-50 flex items-center justify-center">
+  <div class="bg-white rounded-xl p-5 shadow-2xl w-80">
+    <h3 class="font-bold mb-1">印刷ページ選択</h3>
+    <p class="text-xs text-gray-500 mb-2">印刷するページをチェック</p>
+    <div class="flex gap-3 mb-2">
+      <button onclick="chkAll(true)"  class="text-xs text-blue-600 hover:underline font-bold">全選択</button>
+      <button onclick="chkAll(false)" class="text-xs text-red-500 hover:underline font-bold">全解除</button>
+    </div>
+    <div id="page-checks" class="max-h-48 overflow-y-auto border rounded p-2 flex flex-col gap-1 mb-3 bg-gray-50"></div>
+    <div class="flex justify-end gap-2">
+      <button onclick="closePrintModal()" class="px-3 py-1.5 border rounded hover:bg-gray-100 font-bold text-gray-600 text-xs">キャンセル</button>
+      <button onclick="execPrint()"       class="px-3 py-1.5 bg-indigo-600 text-white rounded hover:bg-indigo-700 font-bold text-xs">印刷開始</button>
+    </div>
+  </div>
+</div>
+
+<header class="bg-white shadow z-10 p-2 flex justify-between items-center shrink-0">
+  <h1 class="text-lg font-bold flex items-center gap-2">
+    <svg class="h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+        d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2
+           4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2
+           2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
+    </svg>
+    図面比較ツール <span class="text-xs bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded ml-1">v12</span>
+  </h1>
+  <div class="flex gap-3 items-center">
+    <div class="flex gap-1 text-xs font-bold">
+      <span class="text-red-600 bg-red-50 px-2 py-0.5 rounded border border-red-200">追加・変更(赤)</span>
+      <span class="text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">削除・欠落(青)</span>
+    </div>
+    <div id="status-msg" class="text-xs font-medium text-gray-500">ファイルを2つ選択してください</div>
+  </div>
+</header>
+
+<!-- コントロールバー -->
+<div id="ctrl-bar" class="bg-gray-50 border-b border-gray-200 px-2 py-1 flex flex-wrap gap-y-1 items-center justify-between shrink-0 opacity-50 pointer-events-none transition-opacity">
+  <div class="flex flex-wrap items-center gap-1">
+
+    <!-- 操作モード -->
+    <div class="tg">
+      <span class="text-xs font-bold text-gray-400">操作</span>
+      <div class="flex bg-gray-200 rounded p-0.5 gap-0.5">
+        <button id="btn-pan"    class="px-2 py-0.5 text-xs font-bold rounded bg-white shadow text-blue-600">移動/ズーム</button>
+        <button id="btn-erase"  class="px-2 py-0.5 text-xs font-bold rounded text-gray-600 hover:bg-white">消しゴム</button>
+        <button id="btn-select" class="px-2 py-0.5 text-xs font-bold rounded text-gray-600 hover:bg-white">範囲削除</button>
+      </div>
+      <button id="btn-undo" onclick="doUndo()" disabled
+        class="px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 font-bold text-gray-600" title="Ctrl+Z">↩戻す</button>
+      <button id="btn-redo" onclick="doRedo()" disabled
+        class="px-2 py-0.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-100 font-bold text-gray-600" title="Ctrl+Y">↪進む</button>
+    </div>
+
+    <!-- 表示 -->
+    <div class="tg">
+      <span class="text-xs font-bold text-gray-400">表示</span>
+      <select id="view-mode" class="text-xs border rounded p-0.5 font-bold border-gray-300">
+        <option value="overlay">重ね合わせ</option>
+        <option value="blink">点滅</option>
+        <option value="sbs">左右並列</option>
+      </select>
+    </div>
+
+    <!-- 感度 赤/青 (0=非表示, 150=最濃・ページごと独立) -->
+    <div class="tg">
+      <span class="text-xs font-bold text-gray-400 whitespace-nowrap">感度(P<span id="sens-pg">1</span>)</span>
+      <div class="flex flex-col gap-0.5">
+        <div class="flex items-center gap-1">
+          <span class="text-xs font-bold text-red-500 w-4">赤</span>
+          <input type="range" id="thr-red"  min="0" max="150" value="110" class="w-20 h-1.5 rounded appearance-none cursor-pointer">
+          <span id="val-red"  class="text-xs font-mono text-red-500 w-6 text-right">110</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <span class="text-xs font-bold text-blue-500 w-4">青</span>
+          <input type="range" id="thr-blue" min="0" max="150" value="110" class="w-20 h-1.5 rounded appearance-none cursor-pointer">
+          <span id="val-blue" class="text-xs font-mono text-blue-500 w-6 text-right">110</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 位置微調整（ページ独立） -->
+    <div class="tg">
+      <span class="text-xs font-bold text-gray-400 whitespace-nowrap">位置(P<span id="ctrl-pg">1</span>)</span>
+      <div class="grid grid-cols-3 gap-0.5" style="width:52px">
+        <div></div>
+        <button onclick="adjOff(0,-1)" class="p-0.5 bg-white border rounded hover:bg-gray-100 text-xs text-center leading-none">↑</button>
+        <div></div>
+        <button onclick="adjOff(-1,0)" class="p-0.5 bg-white border rounded hover:bg-gray-100 text-xs text-center leading-none">←</button>
+        <button onclick="resetOff()"   class="p-0.5 bg-gray-100 border rounded hover:bg-gray-200 text-xs text-center leading-none font-bold" title="リセット">○</button>
+        <button onclick="adjOff(1,0)"  class="p-0.5 bg-white border rounded hover:bg-gray-100 text-xs text-center leading-none">→</button>
+        <div></div>
+        <button onclick="adjOff(0,1)"  class="p-0.5 bg-white border rounded hover:bg-gray-100 text-xs text-center leading-none">↓</button>
+        <div></div>
+      </div>
+      <span id="off-disp" class="text-xs font-mono text-gray-400 whitespace-nowrap">0,0</span>
+    </div>
+
+    <!-- 倍率 -->
+    <div class="tg" style="border-right:none">
+      <span id="zoom-lv" class="text-xs font-mono text-gray-600 w-12 text-right">100%</span>
+      <button onclick="resetZoom()" class="text-xs bg-gray-200 px-2 py-0.5 rounded hover:bg-gray-300">全体</button>
+    </div>
+  </div>
+
+  <!-- 右側: 保存/読込/印刷 -->
+  <div class="flex items-center gap-1.5 border-l border-gray-300 pl-3">
+    <button onclick="saveWork()" class="bg-emerald-600 text-white px-2 py-1 rounded hover:bg-emerald-700 text-xs font-bold">💾 保存</button>
+    <label class="bg-amber-500 text-white px-2 py-1 rounded hover:bg-amber-600 text-xs font-bold cursor-pointer">
+      📂 読込<input type="file" id="load-file" accept=".json" class="hidden" onchange="loadWork(this)">
+    </label>
+    <div class="w-px h-5 bg-gray-300 mx-0.5"></div>
+    <select id="print-size"   class="text-xs border rounded p-0.5 font-bold border-gray-300"><option>A4</option><option>A3</option></select>
+    <select id="print-orient" class="text-xs border rounded p-0.5 font-bold border-gray-300">
+      <option value="landscape">横</option>
+      <option value="portrait">縦</option>
+    </select>
+    <button onclick="openPrintModal()" id="print-btn" class="bg-indigo-600 text-white px-3 py-1 rounded hover:bg-indigo-700 text-xs font-bold">🖨️ 印刷</button>
+  </div>
+</div>
+
+<div class="flex-1 flex overflow-hidden">
+  <!-- サイドバー -->
+  <div class="w-64 bg-white border-r border-gray-200 p-3 flex flex-col gap-3 overflow-y-auto shrink-0 shadow-lg z-20">
+    <div class="space-y-1">
+      <label class="block text-xs font-bold text-gray-700">① 変更前 (旧図面)</label>
+      <input type="file" id="file-1" accept=".pdf,image/*">
+      <p id="err-1" class="text-xs text-red-600 font-bold hidden"></p>
+    </div>
+    <div class="space-y-1">
+      <label class="block text-xs font-bold text-gray-700">② 変更後 (新図面)</label>
+      <input type="file" id="file-2" accept=".pdf,image/*">
+      <p id="err-2" class="text-xs text-red-600 font-bold hidden"></p>
+    </div>
+    <div id="auto-msg" class="p-3 bg-indigo-50 rounded-lg text-xs text-indigo-800 border border-indigo-200 text-center font-bold leading-relaxed">
+      📥 2ファイル選択で自動比較
+    </div>
+    <button id="btn-rerun" class="hidden w-full bg-blue-600 text-white py-1.5 rounded hover:bg-blue-700 font-bold text-xs">比較を再実行</button>
+
+    <div id="pg-ctrl" class="hidden border border-gray-200 rounded p-2">
+      <div class="text-xs font-bold text-gray-600 text-center mb-1.5">ページ切替</div>
+      <div class="flex justify-between items-center">
+        <button onclick="changePg(-1)" class="px-2 py-1 bg-gray-100 border rounded hover:bg-gray-200 font-bold text-xs">← 前</button>
+        <span class="text-xs font-bold">Page <span id="pg-num">1</span>/<span id="pg-total">1</span></span>
+        <button onclick="changePg(1)"  class="px-2 py-1 bg-gray-100 border rounded hover:bg-gray-200 font-bold text-xs">次 →</button>
+      </div>
+    </div>
+
+    <div class="p-2 bg-gray-50 border border-gray-200 rounded text-xs text-gray-500 leading-relaxed">
+      <p class="font-bold text-gray-600 mb-1">操作メモ</p>
+      <p>• 重ね合わせ表示 = <b>変更後</b>を薄く表示</p>
+      <p>• 消しゴム/範囲削除 = 赤青のみ消去</p>
+      <p>• 位置調整はページごと独立</p>
+      <p>• 感度: 0=非表示 / 150=最濃（ページ独立）</p>
+      <p>• 💾保存→📂読込で作業継続可</p>
+      <p>• Ctrl+Z/Y でアンドゥ/リドゥ</p>
+    </div>
+  </div>
+
+  <!-- キャンバス -->
+  <div class="flex-1 relative overflow-hidden bg-gray-200">
+    <div id="canvas-container" class="w-full h-full flex items-center justify-center mode-pan">
+      <div id="ph-text" class="text-gray-400 font-bold text-lg pointer-events-none select-none">ここに比較結果が表示されます</div>
+      <canvas id="main-canvas" class="hidden shadow-2xl"></canvas>
+    </div>
+  </div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.disableWorker = true;
+
+// ── 状態変数 ──────────────────────────────
+const MC  = document.getElementById('main-canvas');
+const CTX = MC.getContext('2d', { willReadFrequently: true });
+const CC  = document.getElementById('canvas-container');
+
+let doc1 = { type:null, pdf:null, file:null, currPage:1, totalPages:1 };
+let doc2 = { type:null, pdf:null, file:null, currPage:1, totalPages:1 };
+let gPage = 1, gTotal = 1;
+let bm1 = null, bm2 = null, bW = 0, bH = 0;
+
+const DC  = document.createElement('canvas');
+const DCX = DC.getContext('2d', { willReadFrequently: true });
+let lastR = -1, lastB = -1, lastOX = -9999, lastOY = -9999;
+
+// ページ別状態
+let pageStates  = {};   // page# → ImageData (消しゴム後)
+let pageOffsets = {};   // page# → {x,y}
+let pageSens    = {};   // page# → {r,b} スライダー値
+
+// インタラクション
+let mode = 'pan', scale = 1, panX = 0, panY = 0;
+let isDrag = false, sx = 0, sy = 0;
+let offX = 0, offY = 0;
+let blinkTimer = null, blinkA = true;
+let selRect = null, selDrag = false;
+
+// アンドゥ
+let undoSt = [], redoSt = [];
+const MAX_U = 30;
+let erasingStroke = false;
+
+// スライダー
+const slR = document.getElementById('thr-red');
+const slB = document.getElementById('thr-blue');
+const vR  = document.getElementById('val-red');
+const vB  = document.getElementById('val-blue');
+slR.addEventListener('input', () => { vR.textContent = slR.value; draw(); });
+slB.addEventListener('input', () => { vB.textContent = slB.value; draw(); });
+
+// ── ファイル選択 ───────────────────────────
+document.getElementById('file-1').addEventListener('change', e => onFile(e, doc1, 'err-1'));
+document.getElementById('file-2').addEventListener('change', e => onFile(e, doc2, 'err-2'));
+
+async function onFile(ev, d, eid) {
+  const f = ev.target.files[0];
+  const el = document.getElementById(eid);
+  el.classList.add('hidden'); el.textContent = '';
+  if (!f) return;
+  try {
+    const n = f.name.toLowerCase();
+    const isPdf = f.type === 'application/pdf' || n.endsWith('.pdf');
+    const isImg = f.type.startsWith('image/') || /\.(jpg|jpeg|png|gif|webp)$/.test(n);
+    if (!isPdf && !isImg) throw new Error('PDFか画像のみ対応');
+    d.file = f; d.currPage = 1;
+    if (isPdf) {
+      d.type = 'pdf';
+      d.pdf  = await pdfjsLib.getDocument(await f.arrayBuffer()).promise;
+      d.totalPages = d.pdf.numPages;
+    } else {
+      d.type = 'image'; d.pdf = null; d.totalPages = 1;
+    }
+    initPageUI(); checkReady();
+  } catch (e) {
+    el.textContent = '読込エラー: ' + e.message; el.classList.remove('hidden');
+    ev.target.value = ''; alert('読み込み失敗: ' + e.message);
+  }
+}
+
+// ── ページUI ──────────────────────────────
+function initPageUI() {
+  gTotal = Math.max(doc1.totalPages || 1, doc2.totalPages || 1);
+  gPage  = 1; doc1.currPage = 1; doc2.currPage = 1;
+  const hasPdf = doc1.type === 'pdf' || doc2.type === 'pdf';
+  document.getElementById('pg-ctrl').classList.toggle('hidden', !hasPdf);
+  document.getElementById('pg-num').textContent   = gPage;
+  document.getElementById('pg-total').textContent  = gTotal;
+  document.getElementById('ctrl-pg').textContent   = gPage;
+  document.getElementById('sens-pg').textContent   = gPage;
+}
+
+function updSensDisp(r, b) {
+  slR.value = r; vR.textContent = r;
+  slB.value = b; vB.textContent = b;
+}
+
+window.changePg = async (dir) => {
+  const np = gPage + dir;
+  if (np < 1 || np > gTotal) return;
+
+  // 現ページ保存（差分・オフセット・感度）
+  if (DC.width > 0 && DC.height > 0)
+    pageStates[gPage] = DCX.getImageData(0, 0, DC.width, DC.height);
+  pageOffsets[gPage] = { x: offX, y: offY };
+  pageSens[gPage]    = { r: +slR.value, b: +slB.value };
+
+  gPage = np;
+  if (doc1.type === 'pdf') doc1.currPage = Math.min(np, doc1.totalPages);
+  if (doc2.type === 'pdf') doc2.currPage = Math.min(np, doc2.totalPages);
+  document.getElementById('pg-num').textContent  = gPage;
+  document.getElementById('ctrl-pg').textContent = gPage;
+  document.getElementById('sens-pg').textContent = gPage;
+
+  // 新ページ オフセット復元
+  const o = pageOffsets[gPage] || { x:0, y:0 };
+  offX = o.x; offY = o.y; updOffDisp();
+
+  // 新ページ 感度復元（なければデフォルト110）
+  const ps = pageSens[gPage] || { r:110, b:110 };
+  updSensDisp(ps.r, ps.b);
+
+  // ビットマップ再描画
+  bm1 = doc1.file ? await renderDoc(doc1) : null;
+  bm2 = doc2.file ? await renderDoc(doc2) : null;
+  bW  = bm1 ? bm1.width  : (bm2 ? bm2.width  : 0);
+  bH  = bm1 ? bm1.height : (bm2 ? bm2.height : 0);
+  DC.width = bW; DC.height = bH;
+
+  // 差分状態復元 or 再計算
+  if (pageStates[gPage]) {
+    DCX.putImageData(pageStates[gPage], 0, 0);
+    lastR = +slR.value; lastB = +slB.value; lastOX = offX; lastOY = offY;
+  } else {
+    lastR = -1; lastB = -1;
+  }
+  clearUR(); draw();
+};
+
+// ── 比較実行 ──────────────────────────────
+function checkReady() {
+  if (doc1.file && doc2.file) {
+    document.getElementById('btn-rerun').classList.remove('hidden');
+    runComp();
+  }
+}
+document.getElementById('btn-rerun').addEventListener('click', runComp);
+
+async function runComp() {
+  setCtrlEnabled(false);
+  setMsg('⏳ 解析中...', 'yellow');
+  setStatus('図面を解析中...', 'text-yellow-600');
+  document.getElementById('btn-rerun').disabled = true;
+  pageStates = {}; pageOffsets = {}; pageSens = {}; clearUR();
+  try {
+    bm1 = doc1.file ? await renderDoc(doc1) : null;
+    bm2 = doc2.file ? await renderDoc(doc2) : null;
+    bW  = bm1 ? bm1.width  : (bm2 ? bm2.width  : 0);
+    bH  = bm1 ? bm1.height : (bm2 ? bm2.height : 0);
+    if (bW > 0 && bH > 0) {
+      DC.width = bW; DC.height = bH;
+      resetZoom(); lastR = -1; lastB = -1;
+    }
+    offX = 0; offY = 0; updOffDisp();
+    MC.classList.remove('hidden');
+    document.getElementById('ph-text').style.display = 'none';
+    setCtrlEnabled(true);
+    setMsg('✅ 比較完了', 'green');
+    setStatus('ズレがあれば位置調整してください。', 'text-green-600');
+    startRender();
+  } catch (e) {
+    setMsg('❌ エラー', 'red');
+    setStatus('エラー: ' + e.message, 'text-red-600');
+    alert('比較エラー: ' + e.message);
+  } finally {
+    document.getElementById('btn-rerun').disabled = false;
+  }
+}
+
+async function renderDoc(d) {
+  if (d.type === 'pdf') {
+    const pg = await d.pdf.getPage(d.currPage);
+    const vp = pg.getViewport({ scale: 2.0 });
+    const c  = document.createElement('canvas');
+    c.width = vp.width; c.height = vp.height;
+    await pg.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    return createImageBitmap(c);
+  }
+  return createImageBitmap(d.file);
+}
+
+function setCtrlEnabled(on) {
+  const bar = document.getElementById('ctrl-bar');
+  bar.classList.toggle('opacity-50', !on);
+  bar.classList.toggle('pointer-events-none', !on);
+}
+function setStatus(m, cls) {
+  const el = document.getElementById('status-msg');
+  el.textContent = m; el.className = 'text-xs font-bold ' + cls;
+}
+function setMsg(html, color) {
+  const el = document.getElementById('auto-msg');
+  const map = { yellow:'bg-yellow-50 text-yellow-800 border-yellow-200',
+                 green:'bg-green-50 text-green-800 border-green-200',
+                 red:'bg-red-50 text-red-800 border-red-200' };
+  el.innerHTML = html;
+  el.className = 'p-3 rounded-lg text-xs border text-center font-bold leading-relaxed ' + (map[color] || '');
+}
+
+// ── 差分計算 ──────────────────────────────
+// sR/sB はスライダー値 0-150 (0=非表示, 150=最濃)
+// 内部閾値: 150-slider (slider大→閾値小→より多く表示)
+function calcDiff(b1, b2, bw, bh, ox, oy, sR, sB) {
+  const c1 = mk(bw, bh), c2 = mk(bw, bh);
+  c1.fillStyle = 'white'; c1.fillRect(0,0,bw,bh);
+  c2.fillStyle = 'white'; c2.fillRect(0,0,bw,bh);
+  if (b1) c1.drawImage(b1, 0, 0);
+  if (b2) c2.drawImage(b2, ox, oy, bw, bh);
+  const d1 = c1.getImageData(0,0,bw,bh).data;
+  const d2 = c2.getImageData(0,0,bw,bh).data;
+  const res = new ImageData(bw, bh);
+  const r   = res.data;
+  const hr  = sR === 0;        // 0=完全非表示
+  const hb  = sB === 0;
+  const tR  = 150 - sR;        // 閾値: slider150→0(全表示), slider1→149(ほぼ非表示)
+  const tB  = 150 - sB;
+  for (let i = 0; i < d1.length; i += 4) {
+    const l1 = d1[i]*.3 + d1[i+1]*.59 + d1[i+2]*.11;
+    const l2 = d2[i]*.3 + d2[i+1]*.59 + d2[i+2]*.11;
+    const df = l1 - l2;
+    if (!hr && df > tR)  { r[i]=255; r[i+1]=0;   r[i+2]=0;   r[i+3]=255; }
+    else if (!hb && df < -tB) { r[i]=0;   r[i+1]=100; r[i+2]=255; r[i+3]=255; }
+    else                 { r[i]=0;   r[i+1]=0;   r[i+2]=0;   r[i+3]=0; }
+  }
+  return res;
+}
+function mk(w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  return c.getContext('2d', { willReadFrequently: true });
+}
+
+function genDiff() {
+  if (!bm1 || !bm2) return;
+  const sR = +slR.value, sB = +slB.value;
+  if (sR===lastR && sB===lastB && offX===lastOX && offY===lastOY) return;
+  delete pageStates[gPage];
+  DCX.putImageData(calcDiff(bm1, bm2, bW, bH, offX, offY, sR, sB), 0, 0);
+  clearUR();
+  lastR=sR; lastB=sB; lastOX=offX; lastOY=offY;
+}
+
+// ── 描画 ──────────────────────────────────
+function startRender() {
+  if (blinkTimer) clearInterval(blinkTimer);
+  blinkTimer = setInterval(() => {
+    if (document.getElementById('view-mode').value === 'blink') { blinkA = !blinkA; draw(); }
+  }, 500);
+  draw();
+}
+
+function draw() {
+  if (!bm1 && !bm2) return;
+  const cw = CC.clientWidth, ch = CC.clientHeight;
+  if (MC.width !== cw || MC.height !== ch) { MC.width = cw; MC.height = ch; }
+  CTX.clearRect(0, 0, cw, ch);
+  CTX.imageSmoothingEnabled = false;
+  CTX.save(); CTX.translate(panX, panY); CTX.scale(scale, scale);
+
+  const vm = document.getElementById('view-mode').value;
+  if (vm === 'sbs') {
+    if (bm1) CTX.drawImage(bm1, 0, 0);
+    CTX.save(); CTX.translate(bW+50, 0);
+    if (bm2) CTX.drawImage(bm2, offX, offY, bW, bH);
+    CTX.restore();
+    CTX.strokeStyle = '#aaa'; CTX.strokeRect(0,0,bW,bH); CTX.strokeRect(bW+50,0,bW,bH);
+  } else if (vm === 'blink') {
+    if (blinkA) {
+      if (bm1) CTX.drawImage(bm1, 0, 0);
+      CTX.fillStyle='rgba(0,0,0,.7)'; CTX.font='36px sans-serif'; CTX.fillText('変更前',20,50);
+    } else {
+      if (bm2) CTX.drawImage(bm2, offX, offY, bW, bH);
+      CTX.fillStyle='rgba(0,0,0,.7)'; CTX.font='36px sans-serif'; CTX.fillText('変更後',20,50);
+    }
+  } else {
+    // 重ね合わせ: 変更後（新図面）を薄く背景表示
+    CTX.fillStyle = 'white'; CTX.fillRect(0,0,bW,bH);
+    if (bm2) { CTX.globalAlpha=.4; CTX.drawImage(bm2, offX, offY, bW, bH); CTX.globalAlpha=1; }
+    genDiff();
+    CTX.drawImage(DC, 0, 0);
+    // 範囲選択プレビュー
+    if (mode === 'select' && selRect && selDrag) {
+      const x=Math.min(selRect.x1,selRect.x2), y=Math.min(selRect.y1,selRect.y2);
+      const w=Math.abs(selRect.x2-selRect.x1), h=Math.abs(selRect.y2-selRect.y1);
+      CTX.strokeStyle='rgba(200,0,200,.9)'; CTX.lineWidth=2/scale;
+      CTX.setLineDash([6/scale,3/scale]); CTX.strokeRect(x,y,w,h);
+      CTX.fillStyle='rgba(200,0,200,.08)'; CTX.fillRect(x,y,w,h);
+      CTX.setLineDash([]);
+    }
+  }
+  CTX.restore();
+  document.getElementById('zoom-lv').textContent = Math.round(scale*100) + '%';
+}
+
+// ── アンドゥ/リドゥ ────────────────────────
+function snapSave() {
+  if (!DC.width || !DC.height) return;
+  undoSt.push(DCX.getImageData(0,0,DC.width,DC.height));
+  if (undoSt.length > MAX_U) undoSt.shift();
+  redoSt = []; updUR();
+}
+function clearUR() { undoSt=[]; redoSt=[]; updUR(); }
+function updUR() {
+  document.getElementById('btn-undo').disabled = !undoSt.length;
+  document.getElementById('btn-redo').disabled = !redoSt.length;
+}
+window.doUndo = () => {
+  if (!undoSt.length) return;
+  redoSt.push(DCX.getImageData(0,0,DC.width,DC.height));
+  DCX.putImageData(undoSt.pop(), 0, 0); updUR(); draw();
+};
+window.doRedo = () => {
+  if (!redoSt.length) return;
+  undoSt.push(DCX.getImageData(0,0,DC.width,DC.height));
+  DCX.putImageData(redoSt.pop(), 0, 0); updUR(); draw();
+};
+
+// ── モード切替 ────────────────────────────
+const BTNS = { pan:'btn-pan', erase:'btn-erase', select:'btn-select' };
+Object.entries(BTNS).forEach(([m, id]) => {
+  document.getElementById(id).addEventListener('click', () => setMode(m));
+});
+function setMode(m) {
+  mode = m;
+  Object.values(BTNS).forEach(id => {
+    document.getElementById(id).className =
+      'px-2 py-0.5 text-xs font-bold rounded text-gray-600 hover:bg-white hover:text-gray-800';
+  });
+  document.getElementById(BTNS[m]).className =
+    'px-2 py-0.5 text-xs font-bold rounded bg-white shadow text-blue-600';
+  CC.className = `w-full h-full flex items-center justify-center mode-${m}`;
+}
+
+// ── ズーム ────────────────────────────────
+CC.addEventListener('wheel', e => {
+  if (!bm1 && !bm2) return;
+  e.preventDefault();
+  const rc = CC.getBoundingClientRect();
+  const mx = e.clientX-rc.left, my = e.clientY-rc.top;
+  const cx = (mx-panX)/scale, cy = (my-panY)/scale;
+  const ns = Math.max(.05, Math.min(10, scale*(e.deltaY<0?1.1:1/1.1)));
+  panX = mx-cx*ns; panY = my-cy*ns; scale = ns; draw();
+}, { passive:false });
+
+// ── マウス ────────────────────────────────
+CC.addEventListener('mousedown', e => {
+  if (!bm1 && !bm2) return;
+  isDrag = true;
+  const rc = CC.getBoundingClientRect();
+  const ix = (e.clientX-rc.left-panX)/scale, iy = (e.clientY-rc.top-panY)/scale;
+  if (mode === 'pan') { sx = e.clientX-panX; sy = e.clientY-panY; }
+  else if (mode === 'erase') {
+    if (!erasingStroke) { snapSave(); erasingStroke = true; }
+    erasePoint(ix, iy);
+  } else if (mode === 'select') {
+    if (!erasingStroke) { snapSave(); erasingStroke = true; }
+    selRect = { x1:ix, y1:iy, x2:ix, y2:iy }; selDrag = true;
+  }
+});
+window.addEventListener('mousemove', e => {
+  if (!isDrag) return; e.preventDefault();
+  const rc = CC.getBoundingClientRect();
+  const ix = (e.clientX-rc.left-panX)/scale, iy = (e.clientY-rc.top-panY)/scale;
+  if (mode === 'pan') { panX=e.clientX-sx; panY=e.clientY-sy; draw(); }
+  else if (mode === 'erase') erasePoint(ix, iy);
+  else if (mode === 'select' && selDrag) { selRect.x2=ix; selRect.y2=iy; draw(); }
+});
+window.addEventListener('mouseup', () => {
+  if (mode === 'select' && selDrag && selRect) {
+    if (document.getElementById('view-mode').value === 'overlay') eraseRectArea(selRect);
+    selDrag=false; selRect=null; draw();
+  }
+  isDrag=false; erasingStroke=false;
+});
+
+function erasePoint(ix, iy) {
+  if (document.getElementById('view-mode').value !== 'overlay') return;
+  DCX.save(); DCX.globalCompositeOperation='destination-out';
+  DCX.fillStyle='#000'; DCX.beginPath();
+  DCX.arc(ix, iy, 15/scale, 0, Math.PI*2); DCX.fill();
+  DCX.restore(); draw();
+}
+function eraseRectArea(r) {
+  const x=Math.min(r.x1,r.x2), y=Math.min(r.y1,r.y2);
+  const w=Math.abs(r.x2-r.x1), h=Math.abs(r.y2-r.y1);
+  if (w<1||h<1) return;
+  DCX.save(); DCX.globalCompositeOperation='destination-out';
+  DCX.fillStyle='#000'; DCX.fillRect(x,y,w,h); DCX.restore(); draw();
+}
+
+// ── オフセット（ページ別） ──────────────────
+function updOffDisp() { document.getElementById('off-disp').textContent = offX+','+offY; }
+window.adjOff = (x,y) => {
+  if (!bm1&&!bm2) return;
+  const m = scale>1?1:5; offX+=x*m; offY+=y*m; updOffDisp(); draw();
+};
+window.resetOff = () => { offX=0; offY=0; updOffDisp(); draw(); };
+window.resetZoom = () => {
+  if (!bW||!bH) return;
+  scale = Math.min(CC.clientWidth/bW, CC.clientHeight/bH)*.9;
+  panX  = (CC.clientWidth -bW*scale)/2;
+  panY  = (CC.clientHeight-bH*scale)/2; draw();
+};
+
+// ── キーボード ────────────────────────────
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey && !e.shiftKey && e.key==='z') { e.preventDefault(); doUndo(); return; }
+  if (e.ctrlKey && (e.key==='y'||(e.shiftKey&&e.key==='z'))) { e.preventDefault(); doRedo(); return; }
+  if ((!bm1&&!bm2)||mode!=='pan') return;
+  const s=e.shiftKey?10:1;
+  switch(e.key) {
+    case 'ArrowUp':    offY-=s; break;
+    case 'ArrowDown':  offY+=s; break;
+    case 'ArrowLeft':  offX-=s; break;
+    case 'ArrowRight': offX+=s; break;
+    default: return;
+  }
+  e.preventDefault(); updOffDisp(); draw();
+});
+
+document.getElementById('view-mode').addEventListener('change', draw);
+window.addEventListener('resize', draw);
+
+// ── 作業保存 ──────────────────────────────
+window.saveWork = async () => {
+  if (!doc1.file && !doc2.file) { alert('先に比較を実行してください。'); return; }
+  if (DC.width>0) pageStates[gPage] = DCX.getImageData(0,0,DC.width,DC.height);
+  pageOffsets[gPage] = { x:offX, y:offY };
+  pageSens[gPage]    = { r:+slR.value, b:+slB.value };
+
+  const diffData = {};
+  for (const [pg, id] of Object.entries(pageStates)) {
+    const tc = document.createElement('canvas');
+    tc.width=id.width; tc.height=id.height;
+    tc.getContext('2d').putImageData(id, 0, 0);
+    diffData[pg] = tc.toDataURL('image/png');
+  }
+  const payload = {
+    version:3, thR:+slR.value, thB:+slB.value,
+    pageOffsets, pageSens, diffStates:diffData, gPage, gTotal
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)],{type:'application/json'}));
+  a.download = '図面比較_保存_'+new Date().toISOString().slice(0,10)+'.json';
+  a.click();
+};
+
+window.loadWork = async (input) => {
+  const f = input.files[0]; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    if (data.thR!=null) { slR.value=data.thR; vR.textContent=data.thR; }
+    if (data.thB!=null) { slB.value=data.thB; vB.textContent=data.thB; }
+    pageOffsets = data.pageOffsets || {};
+    pageSens    = data.pageSens    || {};
+    pageStates  = {};
+    for (const [pg, url] of Object.entries(data.diffStates||{})) {
+      const img = new Image();
+      await new Promise((res,rej)=>{img.onload=res;img.onerror=rej;img.src=url;});
+      const tc = document.createElement('canvas');
+      tc.width=img.width; tc.height=img.height;
+      tc.getContext('2d').drawImage(img,0,0);
+      pageStates[pg] = tc.getContext('2d',{willReadFrequently:true}).getImageData(0,0,img.width,img.height);
+    }
+    const cur = pageStates[gPage];
+    if (cur && DC.width>0) {
+      DCX.putImageData(cur,0,0);
+      lastR=+slR.value; lastB=+slB.value; lastOX=offX; lastOY=offY;
+    }
+    const o  = pageOffsets[gPage] || { x:0, y:0 };
+    offX=o.x; offY=o.y; updOffDisp();
+    const ps = pageSens[gPage] || { r:+slR.value, b:+slB.value };
+    updSensDisp(ps.r, ps.b);
+    clearUR(); draw();
+    alert('作業データを読み込みました。');
+  } catch(e) { alert('読込失敗: '+e.message); }
+  input.value='';
+};
+
+// ── 印刷モーダル ──────────────────────────
+window.openPrintModal = () => {
+  if (!doc1.file&&!doc2.file) { alert('先にファイルを読み込んでください。'); return; }
+  const box = document.getElementById('page-checks');
+  box.innerHTML = '';
+  for (let p=1; p<=gTotal; p++) {
+    const lb = document.createElement('label');
+    lb.className='flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-100 rounded px-1';
+    lb.innerHTML=`<input type="checkbox" class="pgck" value="${p}" checked> ページ ${p}`;
+    box.appendChild(lb);
+  }
+  document.getElementById('print-modal').classList.remove('hidden');
+};
+window.closePrintModal = () => document.getElementById('print-modal').classList.add('hidden');
+window.chkAll = (f) => document.querySelectorAll('.pgck').forEach(c => c.checked=f);
+
+window.execPrint = async () => {
+  const pages = Array.from(document.querySelectorAll('.pgck:checked')).map(c=>+c.value);
+  if (!pages.length) { alert('1ページ以上選択してください。'); return; }
+  closePrintModal();
+
+  const btn = document.getElementById('print-btn');
+  const orig = btn.innerHTML; btn.disabled=true;
+
+  const pw = window.open('','_blank');
+  if (!pw) { alert('ポップアップをブロックされました。許可してから再試行してください。'); btn.disabled=false; return; }
+  pw.document.write('<html><body style="font-family:sans-serif;text-align:center;padding:80px"><h2>🖨️ 生成中...</h2></body></html>');
+
+  try {
+    const sz  = document.getElementById('print-size').value;
+    const ori = document.getElementById('print-orient').value;
+    const vm  = document.getElementById('view-mode').value;
+    const sR  = +slR.value, sB = +slB.value;
+    let html  = '';
+
+    for (let i=0; i<pages.length; i++) {
+      const p = pages[i];
+      btn.innerHTML = `⏳ ${i+1}/${pages.length}`;
+
+      let b1=null, b2=null;
+      if (doc1.file) b1 = await renderDoc({...doc1, currPage:Math.min(p,doc1.totalPages||1)});
+      if (doc2.file) b2 = await renderDoc({...doc2, currPage:Math.min(p,doc2.totalPages||1)});
+
+      const bw = b1?b1.width:(b2?b2.width:1000);
+      const bh = b1?b1.height:(b2?b2.height:1000);
+      const po = (p===gPage)?{x:offX,y:offY}:(pageOffsets[p]||{x:0,y:0});
+
+      const tc=document.createElement('canvas'), tc2=tc.getContext('2d');
+      if (vm==='sbs') {
+        tc.width=bw*2+50; tc.height=bh;
+        if (b1) tc2.drawImage(b1,0,0);
+        if (b2) tc2.drawImage(b2,bw+50+po.x,po.y,bw,bh);
+      } else if (vm==='overlay') {
+        tc.width=bw; tc.height=bh;
+        tc2.fillStyle='white'; tc2.fillRect(0,0,bw,bh);
+        if (b2) { tc2.globalAlpha=.4; tc2.drawImage(b2,po.x,po.y,bw,bh); tc2.globalAlpha=1; }
+        if (b1&&b2) {
+          // 保存済み差分 or 現在の差分 or 再計算
+          let diffSrc = pageStates[p] || (p===gPage && DC.width>0 ? DCX.getImageData(0,0,DC.width,DC.height) : null);
+          if (!diffSrc) diffSrc = calcDiff(b1,b2,bw,bh,po.x,po.y,sR,sB);
+          const dd=document.createElement('canvas'); dd.width=bw; dd.height=bh;
+          dd.getContext('2d').putImageData(diffSrc,0,0); tc2.drawImage(dd,0,0);
+        }
+      } else {
+        tc.width=bw; tc.height=bh;
+        if (b2) tc2.drawImage(b2,po.x,po.y,bw,bh);
+        else if (b1) tc2.drawImage(b1,0,0);
+      }
+      html += `<div class="pp"><img src="${tc.toDataURL('image/jpeg',.85)}"/></div>`;
+    }
+
+    pw.document.open();
+    pw.document.write(`<!DOCTYPE html><html><head><title>図面比較印刷</title>
+<style>@page{size:${sz} ${ori};margin:0}body{margin:0;background:#fff}
+.pp{display:flex;justify-content:center;align-items:center;width:100vw;height:100vh;page-break-after:always;break-after:page}
+.pp:last-child{page-break-after:auto;break-after:auto}img{max-width:100%;max-height:100%;object-fit:contain}
+</style></head><body>${html}
+<script>Promise.all(Array.from(document.images).map(i=>i.complete?Promise.resolve():new Promise(r=>{i.onload=r;i.onerror=r;}))).then(()=>setTimeout(()=>{window.print();window.close();},800));<\/script>
+</body></html>`);
+    pw.document.close();
+  } catch(e) { pw.close(); alert('印刷エラー: '+e.message); }
+  finally { btn.innerHTML=orig; btn.disabled=false; }
+};
+</script>
+</body>
+</html>
