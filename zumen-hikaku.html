@@ -59,7 +59,7 @@ button:disabled { opacity:0.35; cursor:not-allowed; }
            4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2
            2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
     </svg>
-    図面比較ツール <span class="text-xs bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded ml-1">v12</span>
+    PDF比較ツール <span class="text-xs bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded ml-1">v12</span>
   </h1>
   <div class="flex gap-3 items-center">
     <div class="flex gap-1 text-xs font-bold">
@@ -159,12 +159,12 @@ button:disabled { opacity:0.35; cursor:not-allowed; }
   <!-- サイドバー -->
   <div class="w-64 bg-white border-r border-gray-200 p-3 flex flex-col gap-3 overflow-y-auto shrink-0 shadow-lg z-20">
     <div class="space-y-1">
-      <label class="block text-xs font-bold text-gray-700">① 変更前 (旧図面)</label>
+      <label class="block text-xs font-bold text-gray-700">① 変更前 (旧PDF)</label>
       <input type="file" id="file-1" accept=".pdf,image/*">
       <p id="err-1" class="text-xs text-red-600 font-bold hidden"></p>
     </div>
     <div class="space-y-1">
-      <label class="block text-xs font-bold text-gray-700">② 変更後 (新図面)</label>
+      <label class="block text-xs font-bold text-gray-700">② 変更後 (新PDF)</label>
       <input type="file" id="file-2" accept=".pdf,image/*">
       <p id="err-2" class="text-xs text-red-600 font-bold hidden"></p>
     </div>
@@ -344,7 +344,7 @@ document.getElementById('btn-rerun').addEventListener('click', runComp);
 async function runComp() {
   setCtrlEnabled(false);
   setMsg('⏳ 解析中...', 'yellow');
-  setStatus('図面を解析中...', 'text-yellow-600');
+  setStatus('PDFを解析中...', 'text-yellow-600');
   document.getElementById('btn-rerun').disabled = true;
   pageStates = {}; pageOffsets = {}; pageSens = {}; clearUR();
   try {
@@ -477,7 +477,7 @@ function draw() {
       CTX.fillStyle='rgba(0,0,0,.7)'; CTX.font='36px sans-serif'; CTX.fillText('変更後',20,50);
     }
   } else {
-    // 重ね合わせ: 変更後（新図面）を薄く背景表示
+    // 重ね合わせ: 変更後（新PDF）を薄く背景表示
     CTX.fillStyle = 'white'; CTX.fillRect(0,0,bW,bH);
     if (bm2) { CTX.globalAlpha=.4; CTX.drawImage(bm2, offX, offY, bW, bH); CTX.globalAlpha=1; }
     genDiff();
@@ -645,7 +645,7 @@ window.saveWork = async () => {
   };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(payload)],{type:'application/json'}));
-  a.download = '図面比較_保存_'+new Date().toISOString().slice(0,10)+'.json';
+  a.download = 'PDF比較_保存_'+new Date().toISOString().slice(0,10)+'.json';
   a.click();
 };
 
@@ -753,7 +753,7 @@ window.execPrint = async () => {
     }
 
     pw.document.open();
-    pw.document.write(`<!DOCTYPE html><html><head><title>図面比較印刷</title>
+    pw.document.write(`<!DOCTYPE html><html><head><title>PDF比較印刷</title>
 <style>@page{size:${sz} ${ori};margin:0}body{margin:0;background:#fff}
 .pp{display:flex;justify-content:center;align-items:center;width:100vw;height:100vh;page-break-after:always;break-after:page}
 .pp:last-child{page-break-after:auto;break-after:auto}img{max-width:100%;max-height:100%;object-fit:contain}
